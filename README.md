@@ -52,7 +52,8 @@ for why it is built this way.
    Then run `cargo update --workspace` to refresh `Cargo.lock` for the new
    name. Nothing else names the CLI: the workflows, `dist-workspace.toml`
    and `scripts/binaries/` read the name from `Cargo.toml` and
-   `packaging.toml`, and are template-owned.
+   `packaging.toml`, and are template-owned (the container image's
+   `/<binary>` included).
 3. Point template sync at this template. `.github/template-sync-state.json`
    here records the `template-rust-crate` tag this template itself last synced
    from; the copy in a new CLI must instead name this repository and the tag

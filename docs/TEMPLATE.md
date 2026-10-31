@@ -788,6 +788,9 @@ in `docs/adrs/0002-rust-cli-template.md`.
 - **Container image.** `scripts/binaries/Dockerfile` copies the static binary
   into `scratch` (no shell, no CA certificates; the file says how to switch to
   a digest-pinned distroless static base for a CLI that needs TLS), non-root.
+  It is a template: `stage-image` renders `@BINARY@` with the binary's name
+  (from `Cargo.toml`, like the archives) into the build context's own
+  `Dockerfile`, so a renamed CLI's image holds `/<binary>`, with no edit here.
   The `image` job builds it for `linux/amd64` and `linux/arm64` from the
   attested archives, never from source, pushes `ghcr.io/<owner>/<repo>` with
   `GITHUB_TOKEN` and attests the digest.

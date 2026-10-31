@@ -387,9 +387,11 @@ def stage_image(archives: Path, out: Path, project: dict) -> list[Path]:
         if not target["target"].endswith("unknown-linux-musl"):
             continue
         arch = {"x64": "amd64", "arm64": "arm64"}[target["npm_cpu"]]
-        dest = out / f"linux-{arch}" / "cli"
+        dest = out / f"linux-{arch}" / binary
         write_executable(dest, extract_binary(archives / archive_name(binary, target), binary))
         staged.append(dest)
+    dockerfile = (Path(__file__).resolve().parent / "Dockerfile").read_text(encoding="utf-8")
+    (out / "Dockerfile").write_text(dockerfile.replace("@BINARY@", binary), encoding="utf-8")
     return staged
 
 
