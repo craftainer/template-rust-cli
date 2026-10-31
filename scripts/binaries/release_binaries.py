@@ -395,6 +395,8 @@ def stage_image(archives: Path, out: Path, project: dict) -> list[Path]:
         write_executable(dest, extract_binary(archives / archive_name(binary, target), binary))
         staged.append(dest)
     dockerfile = (Path(__file__).resolve().parent / "Dockerfile").read_text(encoding="utf-8")
+    if "@BINARY@" not in dockerfile:
+        raise Error("scripts/binaries/Dockerfile has no @BINARY@ placeholder to render")
     (out / "Dockerfile").write_text(dockerfile.replace("@BINARY@", binary), encoding="utf-8")
     return staged
 

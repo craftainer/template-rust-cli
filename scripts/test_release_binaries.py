@@ -498,6 +498,9 @@ class StageImage(unittest.TestCase):
     def test_a_binary_name_that_breaks_the_dockerfile_is_refused(self):
         with tempfile.TemporaryDirectory() as tmp, self.assertRaises(rb.Error):
             rb.stage_image(Path(tmp), Path(tmp) / "out", {"binary": 'a"b'})
+        for bad in ("a b", "a\n", "-a", "a$b", "a\\b"):
+            with self.subTest(bad=bad), self.assertRaises(rb.Error):
+                rb.stage_image(Path("."), Path("."), {"binary": bad})
 
     def test_a_renamed_crate_gets_its_own_binary_in_the_image(self):
         with tempfile.TemporaryDirectory() as tmp:
