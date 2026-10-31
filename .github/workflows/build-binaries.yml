@@ -208,7 +208,7 @@ jobs:
           last=$(( ${#dirs[@]} - 1 ))
           for i in "${!dirs[@]}"; do
             if [ "$i" -eq "$last" ]; then dest=npm-tarballs/root; else dest=npm-tarballs/platform; fi
-            npm pack --silent --pack-destination "$dest" "${dirs[$i]}"
+            npm pack --silent --pack-destination "$dest" "./${dirs[$i]}"
           done
           ls npm-tarballs/*
 
