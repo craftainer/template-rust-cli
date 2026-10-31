@@ -1,0 +1,358 @@
+# Publishes the binaries of an existing release: native archives for Linux
+# (static musl), macOS and Windows on the GitHub release, wheels and an sdist
+# on PyPI, npm packages, a Homebrew formula and a container image. It is the
+# CLI template's extension of the release contract and runs by hand right
+# after each `Release`:
+#   gh workflow run release-binaries.yml -f tag=vX.Y.Z
+# The release lander does this as part of the release and watches the run.
+#
+# Why a separate, manual workflow: template-rust-crate's release.yml is
+# base-owned and builds one source crate on one runner; it has no job that
+# can hold `id-token` for binaries and no hook for macOS/Windows runners.
+# `workflow_run` (zizmor: dangerous-triggers) is not used and is not
+# suppressed; GITHUB_TOKEN-created events start no other workflows. So the
+# dispatch is manual. If the contract gains an extension point for it
+# (NX1/NX4-style), this file moves into release.yml and a tombstone line in
+# the sync manifest removes it from every CLI.
+#
+# Safe to re-run for the same tag: one run per tag at a time (`concurrency`),
+# `gh release upload --clobber`, `uv publish --check-url` skips files the index
+# already has and publish-npm.sh skips versions the registry already has.
+#
+# PyPI's and npm's trusted publishers name THIS file (PyPI does not accept a
+# reusable workflow as the publisher) and the `release` environment. The build
+# itself is build-binaries.yml, called below; `id-token: write` and
+# `attestations: write` are set here and there.
+name: Release binaries
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to publish binaries for, e.g. v1.2.3
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-binaries-${{ inputs.tag }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  guard:
+    name: Guard
+    # renovate: datasource=github-runners depName=ubuntu
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-24.04' }}
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+      prerelease: ${{ steps.check.outputs.prerelease }}
+    steps:
+      - name: Check out the default branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check the ref and the tag
+        id: check
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: scripts/binaries/check-dispatch.sh >> "$GITHUB_OUTPUT"
+
+      # Only a published release is released: the contract's `release` job
+      # creates it after every gate passed. A draft is a failed attempt.
+      - name: Check the release exists
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          draft=$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)
+          if [ "$draft" != "false" ]; then
+            echo "::error::release $RELEASE_TAG is a draft"
+            exit 1
+          fi
+
+      # The tag must sit in the default branch's history (not on a stray
+      # branch): the default branch is "ahead of" or "identical to" it.
+      - name: Check the tag is on the default branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          status=$(gh api "repos/${GITHUB_REPOSITORY}/compare/${RELEASE_TAG}...${DEFAULT_BRANCH}" --jq .status)
+          case "$status" in
+            ahead | identical) ;;
+            *)
+              echo "::error::tag $RELEASE_TAG is not in the history of $DEFAULT_BRANCH (compare status: $status)"
+              exit 1
+              ;;
+          esac
+
+  build:
+    name: Build
+    needs: guard
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    uses: $/.github/workflows/build-binaries.yml
+    with:
+      tag: ${{ inputs.tag }}
+
+  github-release:
+    name: Attach to the GitHub release
+    needs: [guard, build]
+    # renovate: datasource=github-runners depName=ubuntu
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-24.04' }}
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - name: Download the release files
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-binaries
+          path: release-binaries/
+
+      # Archives, their checksums and the Homebrew formula; wheels, the sdist
+      # and the npm tarballs live on their registries.
+      - name: Upload to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          gh release upload "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --clobber \
+            release-binaries/archives/* release-binaries/homebrew/*
+
+  pypi:
+    name: PyPI
+    needs: [guard, build]
+    # `pypi` or `testpypi`, as in the rest of the family; unset skips it.
+    if: ${{ vars.CLI_PYPI_PUBLISH != '' }}
+    # renovate: datasource=github-runners depName=ubuntu
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-24.04' }}
+    timeout-minutes: 15
+    environment: release
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Set up uv
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          version: 0.13.5
+          enable-cache: false
+
+      - name: Download the release files
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-binaries
+          path: release-binaries/
+
+      # `uv publish` does not generate attestations; it uploads the
+      # `*.publish.attestation` files next to the distributions. These are
+      # PEP 740 attestations signed with this job's OIDC identity, which is
+      # this workflow file: the trusted publisher's identity.
+      - name: Generate PEP 740 attestations
+        uses: astral-sh/attest-action@39b6ce43875c196a579e31635b11aa2a2036384a # v0.0.7
+        with:
+          paths: release-binaries/wheels/*
+
+      - name: Publish to PyPI
+        env:
+          PYPI_PUBLISH: ${{ vars.CLI_PYPI_PUBLISH }}
+        run: |
+          set -euo pipefail
+          case "$PYPI_PUBLISH" in
+            pypi) upload=https://upload.pypi.org/legacy/; check=https://pypi.org/simple/ ;;
+            testpypi) upload=https://test.pypi.org/legacy/; check=https://test.pypi.org/simple/ ;;
+            *) echo "::error::CLI_PYPI_PUBLISH must be 'pypi' or 'testpypi', got '$PYPI_PUBLISH'"; exit 1 ;;
+          esac
+          uv publish --trusted-publishing always --publish-url "$upload" --check-url "$check" \
+            release-binaries/wheels/*.whl release-binaries/wheels/*.tar.gz
+
+  npm:
+    name: npm
+    needs: [guard, build]
+    if: ${{ vars.CLI_NPM_PUBLISH != '' }}
+    # renovate: datasource=github-runners depName=ubuntu
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-24.04' }}
+    timeout-minutes: 15
+    environment: release
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Check out the default branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Same Node as template-npm-package; publish-npm.sh brings the pinned
+      # npm (staged publishing needs >= 11.15.0, OIDC trusted publishing
+      # >= 11.5.1).
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24.22.1
+          package-manager-cache: false
+
+      - name: Download the release files
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-binaries
+          path: release-binaries/
+
+      # The only step that sees the bootstrap token (an empty secret counts
+      # as absent). Never map it to NODE_AUTH_TOKEN: npm's OIDC trusted
+      # publishing breaks when that is set, even empty.
+      - name: Publish the platform packages, then the root package
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: scripts/binaries/publish-npm.sh release-binaries/npm/platform release-binaries/npm/root
+
+  homebrew:
+    name: Homebrew tap
+    needs: [guard, build]
+    # `HOMEBREW_TAP` names the tap repository (<owner>/homebrew-<tap>); unset
+    # skips the job. The tap and its credential are a per-CLI decision.
+    if: ${{ vars.HOMEBREW_TAP != '' }}
+    # renovate: datasource=github-runners depName=ubuntu
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-24.04' }}
+    timeout-minutes: 10
+    environment: release
+    permissions:
+      contents: read
+    steps:
+      - name: Download the release files
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-binaries
+          path: release-binaries/
+
+      - name: Check out the tap
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ vars.HOMEBREW_TAP }}
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: tap
+          persist-credentials: false
+
+      - name: Commit the formula
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p tap/Formula
+          cp release-binaries/homebrew/*.rb tap/Formula/
+          cd tap
+          if git diff --quiet HEAD -- Formula && [ -z "$(git ls-files --others --exclude-standard Formula)" ]; then
+            echo "The formula is already up to date."
+            exit 0
+          fi
+          git add Formula
+          git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit -m "chore: update to ${GITHUB_REPOSITORY} ${RELEASE_TAG}"
+          auth=$(printf 'x-access-token:%s' "$HOMEBREW_TAP_TOKEN" | base64 -w0)
+          git -c "http.extraheader=Authorization: Basic ${auth}" push origin HEAD
+
+  image:
+    name: Container image
+    needs: [guard, build]
+    # Any non-empty value publishes ghcr.io/<owner>/<repo>:<version> (a
+    # multi-arch image of the static binary); unset skips it.
+    if: ${{ vars.CLI_IMAGE_PUBLISH != '' }}
+    # renovate: datasource=github-runners depName=ubuntu
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-24.04' }}
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    steps:
+      - name: Check out the default branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          version: 0.13.5
+          enable-cache: false
+
+      - name: Download the release files
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-binaries
+          path: release-binaries/
+
+      - name: Lay out the build context
+        run: uv run --no-project --python '>=3.11' python -I scripts/binaries/release_binaries.py stage-image --archives release-binaries/archives --out image-context
+
+      - name: Name the image
+        id: image
+        env:
+          VERSION: ${{ needs.guard.outputs.version }}
+          PRERELEASE: ${{ needs.guard.outputs.prerelease }}
+        run: |
+          name="ghcr.io/${GITHUB_REPOSITORY,,}"
+          tags="$name:$VERSION"
+          if [ "$PRERELEASE" != "true" ]; then
+            tags="$tags"$'\n'"$name:latest"
+          fi
+          {
+            echo "name=$name"
+            echo "tags<<EOF"
+            echo "$tags"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Build and push
+        id: push
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: image-context
+          file: scripts/binaries/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.image.outputs.tags }}
+          build-args: |
+            SOURCE_URL=${{ github.server_url }}/${{ github.repository }}
+            VERSION=${{ needs.guard.outputs.version }}
+          # The provenance is the GitHub attestation below.
+          provenance: false
+          sbom: false
+
+      - name: Attest the image
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ${{ steps.image.outputs.name }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
+          create-storage-record: false

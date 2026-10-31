@@ -1,0 +1,33 @@
+# Python packaging of the binary: maturin with `bindings = "bin"` builds the
+# crate's executable into a wheel (`pip install template-rust-cli` puts the
+# program on PATH, no Python code involved). The version is the one in
+# Cargo.toml, which the release workflows stamp from the tag. An instance
+# renames the distribution and fills in the metadata (README.md lists the
+# places). Built by .github/workflows/build-binaries.yml.
+
+[build-system]
+requires = ["maturin>=1.15,<2"]
+build-backend = "maturin"
+
+[project]
+name = "template-rust-cli"
+description = "Template repository for Rust command-line programs"
+readme = "README.md"
+requires-python = ">=3.9"
+license = "GPL-3.0-only"
+license-files = ["LICENSE"]
+classifiers = [
+    "Environment :: Console",
+    "Programming Language :: Rust",
+]
+dynamic = ["version"]
+
+[project.urls]
+Repository = "https://github.com/craftainer/template-rust-cli"
+
+[tool.maturin]
+bindings = "bin"
+strip = true
+# Cargo.toml's [profile.dist], the profile the release binaries use.
+profile = "dist"
+locked = true

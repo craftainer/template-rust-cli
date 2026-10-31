@@ -1,0 +1,263 @@
+# Builds, attests and packages the release binaries for one release tag. A
+# reusable workflow (`workflow_call`), called by release-binaries.yml and by
+# nothing else. Calling it as a separate workflow is what makes the
+# attestations SLSA Build L3: the build runs in its own isolated workflow
+# run, and the signing identity is this reusable workflow, not the caller.
+# See docs/TEMPLATE.md, "Rust CLI template notes".
+#
+# Per target (matrix, one native runner each): `dist build` makes the archive
+# and its checksum, `maturin build` the wheel; both are smoke-tested and
+# attested. Then once: the sdist, the npm tarballs (six platform packages and
+# the root package), the Homebrew formula, all attested, and everything is
+# uploaded as the `release-binaries` artifact for the caller to publish.
+# Nothing is published from here, so no registry credential exists in this
+# workflow; `id-token: write` and `attestations: write` are only for the
+# attestations (the caller sets them too: a called workflow can't hold
+# permissions its caller withheld).
+name: Build binaries
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: Release tag to build, vX.Y.Z (validated by the caller)
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    name: build (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        # Keep in step with scripts/binaries/targets.json and dist-workspace.toml
+        # (scripts/test_release_binaries.py checks).
+        include:
+          - target: x86_64-unknown-linux-musl
+            runner: ubuntu-24.04
+            archive: tar.gz
+          - target: aarch64-unknown-linux-musl
+            runner: ubuntu-24.04-arm
+            archive: tar.gz
+          - target: x86_64-apple-darwin
+            runner: macos-15
+            archive: tar.gz
+          - target: aarch64-apple-darwin
+            runner: macos-15
+            archive: tar.gz
+          - target: x86_64-pc-windows-msvc
+            runner: windows-2025
+            archive: zip
+          - target: aarch64-pc-windows-msvc
+            runner: windows-11-arm
+            archive: zip
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    env:
+      RELEASE_TAG: ${{ inputs.tag }}
+      TARGET: ${{ matrix.target }}
+      ARCHIVE: ${{ matrix.archive }}
+    steps:
+      - name: Check out the release tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/tags/${{ inputs.tag }}
+          persist-credentials: false
+
+      # uv only supplies a uniform Python (the runners' `python3` is missing
+      # on Windows) for the helper scripts; nothing is installed with it.
+      - name: Set up uv
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          version: 0.13.5
+          enable-cache: false
+
+      - name: Install musl tools
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends musl-tools
+
+      # rust-toolchain.toml pins the compiler; rustup installs it on first use.
+      - name: Add the Rust target
+        run: rustup target add "$TARGET"
+
+      # The version lives only in the tag: stamp it into Cargo.toml/Cargo.lock
+      # as the contract's release-stamped.sh does (this runner is thrown away,
+      # so nothing is restored afterwards).
+      - name: Stamp the version
+        run: |
+          cargo fetch --locked
+          uv run --no-project --python '>=3.11' python -I scripts/release-stamp-version.py Cargo.toml "${RELEASE_TAG#v}"
+          cargo update --workspace --offline --quiet
+
+      - name: Install dist and maturin
+        run: |
+          tools="$RUNNER_TEMP/tools"
+          uv run --no-project --python '>=3.11' python -I scripts/binaries/release_binaries.py install-tool dist "$tools"
+          uv run --no-project --python '>=3.11' python -I scripts/binaries/release_binaries.py install-tool maturin "$tools"
+          echo "$tools" >> "$GITHUB_PATH"
+
+      - name: Build the archive
+        run: dist build --tag "$RELEASE_TAG" --artifacts=local --target "$TARGET"
+
+      # The musl binary is static, so the one Linux wheel is tagged for glibc
+      # (manylinux2014) and musl (musllinux_1_2) hosts alike.
+      - name: Build the wheel
+        run: |
+          compat=()
+          if [ "$RUNNER_OS" = Linux ]; then
+            compat=(--compatibility manylinux2014 musllinux_1_2)
+          fi
+          maturin build --target "$TARGET" --out wheelhouse "${compat[@]}"
+
+      - name: Smoke-test the archive
+        run: |
+          archives=(target/distrib/*-"$TARGET"."$ARCHIVE")
+          test "${#archives[@]}" -eq 1
+          # The Intel macOS binary runs on the arm64 runner only through Rosetta.
+          if [ "$TARGET" = x86_64-apple-darwin ] && ! arch -x86_64 /usr/bin/true 2>/dev/null; then
+            echo "::warning::Rosetta is not available on this runner; the $TARGET archive was not smoke-tested"
+            exit 0
+          fi
+          uv run --no-project --python '>=3.11' python -I scripts/binaries/release_binaries.py smoke "${archives[0]}" "${RELEASE_TAG#v}"
+
+      - name: Stage the artifacts
+        run: |
+          mkdir stage
+          cp target/distrib/*-"$TARGET"."$ARCHIVE" target/distrib/*-"$TARGET"."$ARCHIVE".sha256 wheelhouse/*.whl stage/
+
+      - name: Attest the archive and the wheel
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: |
+            stage/*.${{ matrix.archive }}
+            stage/*.whl
+          create-storage-record: false
+
+      - name: Upload the artifacts
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: binaries-${{ matrix.target }}
+          path: stage/
+          if-no-files-found: error
+
+  package:
+    name: sdist, npm and Homebrew
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    env:
+      RELEASE_TAG: ${{ inputs.tag }}
+    steps:
+      - name: Check out the release tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/tags/${{ inputs.tag }}
+          persist-credentials: false
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          version: 0.13.5
+          enable-cache: false
+
+      - name: Download the per-target artifacts
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: binaries-*
+          path: parts/
+          merge-multiple: true
+
+      - name: Stamp the version
+        run: |
+          cargo fetch --locked
+          uv run --no-project --python '>=3.11' python -I scripts/release-stamp-version.py Cargo.toml "${RELEASE_TAG#v}"
+          cargo update --workspace --offline --quiet
+
+      - name: Install maturin
+        run: |
+          tools="$RUNNER_TEMP/tools"
+          uv run --no-project --python '>=3.11' python -I scripts/binaries/release_binaries.py install-tool maturin "$tools"
+          echo "$tools" >> "$GITHUB_PATH"
+
+      - name: Build the sdist
+        run: maturin sdist --out sdist
+
+      - name: Build the npm packages
+        run: |
+          version="${RELEASE_TAG#v}"
+          mapfile -t dirs < <(uv run --no-project --python '>=3.11' python -I scripts/binaries/release_binaries.py npm --version "$version" --archives parts --out npm-build)
+          mkdir -p npm-tarballs/platform npm-tarballs/root
+          # The last directory is the root package, the others are platform packages.
+          last=$(( ${#dirs[@]} - 1 ))
+          for i in "${!dirs[@]}"; do
+            if [ "$i" -eq "$last" ]; then dest=npm-tarballs/root; else dest=npm-tarballs/platform; fi
+            npm pack --silent --pack-destination "$dest" "${dirs[$i]}"
+          done
+          ls npm-tarballs/*
+
+      # npm lays the root and platform packages out as node_modules/<name>;
+      # do the same by hand (the platform packages aren't published yet, so a
+      # real install can't resolve them) and run the launcher.
+      - name: Smoke-test the npm launcher
+        run: |
+          version="${RELEASE_TAG#v}"
+          root_name=$(tar -xzOf npm-tarballs/root/*.tgz package/package.json | python3 -c 'import json, sys; print(json.load(sys.stdin)["name"])')
+          cli=$(tar -xzOf npm-tarballs/root/*.tgz package/package.json | python3 -c 'import json, sys; print(next(iter(json.load(sys.stdin)["bin"])))')
+          modules=smoke/node_modules
+          mkdir -p "$modules/$root_name"
+          tar -xzf npm-tarballs/root/*.tgz -C "$modules/$root_name" --strip-components=1
+          for tarball in npm-tarballs/platform/*linux-x64*.tgz; do
+            name=$(tar -xzOf "$tarball" package/package.json | python3 -c 'import json, sys; print(json.load(sys.stdin)["name"])')
+            mkdir -p "$modules/$name"
+            tar -xzf "$tarball" -C "$modules/$name" --strip-components=1
+          done
+          out=$(node "$modules/$root_name/bin/$cli.js" --version)
+          echo "$out"
+          case "$out" in *"$version"*) ;; *) echo "::error::the npm launcher printed '$out', expected $version"; exit 1 ;; esac
+
+      - name: Write the Homebrew formula
+        run: |
+          binary=$(uv run --no-project --python '>=3.11' python -I -c 'import tomllib; m = tomllib.load(open("Cargo.toml", "rb")); print((m.get("bin") or [m["package"]])[0]["name"])')
+          uv run --no-project --python '>=3.11' python -I scripts/binaries/release_binaries.py brew --version "${RELEASE_TAG#v}" --archives parts --out "homebrew/$binary.rb"
+
+      - name: Attest the sdist and the npm tarballs
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: |
+            sdist/*.tar.gz
+            npm-tarballs/platform/*.tgz
+            npm-tarballs/root/*.tgz
+          create-storage-record: false
+
+      - name: Collect the release files
+        run: |
+          mkdir -p out/archives out/wheels out/npm out/homebrew
+          cp parts/*.tar.gz parts/*.zip parts/*.sha256 out/archives/
+          cp parts/*.whl sdist/*.tar.gz out/wheels/
+          cp -R npm-tarballs/platform npm-tarballs/root out/npm/
+          cp homebrew/* out/homebrew/
+          find out -type f | sort
+
+      - name: Upload the release files
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-binaries
+          path: out/
+          if-no-files-found: error

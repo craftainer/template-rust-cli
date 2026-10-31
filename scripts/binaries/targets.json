@@ -1,0 +1,53 @@
+{
+  "_comment": "The release targets, in one place: dist-workspace.toml's `targets`, the build matrix in .github/workflows/build-binaries.yml and the npm/Homebrew packaging all derive from it. scripts/test_release_binaries.py fails when they drift apart.",
+  "targets": [
+    {
+      "target": "x86_64-unknown-linux-musl",
+      "runner": "ubuntu-24.04",
+      "npm_os": "linux",
+      "npm_cpu": "x64",
+      "archive": "tar.gz",
+      "exe": ""
+    },
+    {
+      "target": "aarch64-unknown-linux-musl",
+      "runner": "ubuntu-24.04-arm",
+      "npm_os": "linux",
+      "npm_cpu": "arm64",
+      "archive": "tar.gz",
+      "exe": ""
+    },
+    {
+      "target": "x86_64-apple-darwin",
+      "runner": "macos-15",
+      "npm_os": "darwin",
+      "npm_cpu": "x64",
+      "archive": "tar.gz",
+      "exe": ""
+    },
+    {
+      "target": "aarch64-apple-darwin",
+      "runner": "macos-15",
+      "npm_os": "darwin",
+      "npm_cpu": "arm64",
+      "archive": "tar.gz",
+      "exe": ""
+    },
+    {
+      "target": "x86_64-pc-windows-msvc",
+      "runner": "windows-2025",
+      "npm_os": "win32",
+      "npm_cpu": "x64",
+      "archive": "zip",
+      "exe": ".exe"
+    },
+    {
+      "target": "aarch64-pc-windows-msvc",
+      "runner": "windows-11-arm",
+      "npm_os": "win32",
+      "npm_cpu": "arm64",
+      "archive": "zip",
+      "exe": ".exe"
+    }
+  ]
+}

@@ -1,0 +1,11 @@
+# Instance-owned inputs to the binary release (scripts/binaries/release_binaries.py,
+# .github/workflows/release-binaries.yml). Everything else (version,
+# description, license, repository, keywords, binary name) is read from
+# Cargo.toml. README.md lists the places an instance renames.
+
+[npm]
+# The root package users install: `npm install -g <package>`. Its
+# optionalDependencies pin one platform package per target, named
+# `<scope>/<binary>-<os>-<cpu>` (e.g. `@craftainer/template-rust-cli-linux-x64`).
+package = "template-rust-cli"
+scope = "@craftainer"

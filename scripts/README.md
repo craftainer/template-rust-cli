@@ -39,6 +39,18 @@
   `release-stamp-version.py`. It runs `cargo fetch --locked` first, because
   the stamp's `cargo update --offline` needs the locked dependencies in the
   local registry cache, which a fresh runner lacks.
+- `binaries/` (+ `test_release_binaries.py`, run by a hook) — the CLI's binary
+  release (`docs/TEMPLATE.md`, "Rust CLI template notes"):
+  `release_binaries.py` is the one implementation of the pinned dist/maturin
+  install (SHA-256-checked), the archive smoke test, the npm package
+  generator, the Homebrew formula generator and the image build context;
+  `targets.json` is the target list the workflows' matrix and
+  `dist-workspace.toml` must agree with; `launcher.js` is the root npm
+  package's launcher; `check-dispatch.sh` is `release-binaries.yml`'s
+  ref and tag guard; `publish-npm.sh` publishes the platform packages and then
+  the root package (staged with a bootstrap token, else through trusted
+  publishing); `Dockerfile` is the `scratch` release image. Run the Python
+  with `python3 -I`.
 - `develop.d/`, `post-create.d/` — instance hook directories, empty apart
   from their own `README.md`; see `docs/TEMPLATE.md`'s "Instance extension
   points".
