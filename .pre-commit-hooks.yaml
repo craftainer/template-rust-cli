@@ -1,0 +1,26 @@
+# Hooks other repositories can use through pre-commit or prek:
+#
+#   repos:
+#     - repo: https://github.com/craftainer/template-rust-cli
+#       rev: vX.Y.Z
+#       hooks:
+#         - id: template-rust-cli
+#
+# `language: rust` builds the tagged source with `cargo install` into the
+# hook's private environment (pre-commit and prek both install a Rust
+# toolchain on demand), so a hook needs no release binary and pins to a git
+# tag. A faster install without a compiler is a mirror repository that
+# installs the PyPI wheel (`language: python`, `additional_dependencies`).
+#
+# The template's CLI only greets, so this hook greets "pre-commit" and always
+# passes. An instance replaces `id`, `name`, `description`, `entry` and
+# `args` with its real command line (and `files`/`types` if it takes file
+# names); README.md lists the places an instance renames.
+- id: template-rust-cli
+  name: template-rust-cli
+  description: Example hook that runs the template's command-line program
+  entry: template-rust-cli
+  args: [pre-commit]
+  language: rust
+  pass_filenames: false
+  always_run: true

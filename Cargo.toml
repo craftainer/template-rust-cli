@@ -11,7 +11,7 @@ edition = "2024"
 # Matches rust-toolchain.toml (major.minor is enough for MSRV semantics).
 rust-version = "1.99"
 license = "GPL-3.0-only"
-repository = "https://github.com/craftainer/template-rust-crate"
+repository = "https://github.com/craftainer/template-rust-cli"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
@@ -22,10 +22,9 @@ all = { level = "warn", priority = -1 }
 pedantic = { level = "warn", priority = -1 }
 
 [package]
-# The template carries its own name; an instance renames it to
-# `craftainer-<name>` (see README.md).
-name = "template-rust-crate"
-description = "Template repository for publishable Rust crates"
+# The template carries its own name; an instance renames it (see README.md).
+name = "template-rust-cli"
+description = "Template repository for Rust command-line programs"
 readme = "README.md"
 # Stays 0.0.0 in git: the release tag is the real version. `publish` is left
 # at Cargo's default (true) and gated by the release contract's
@@ -44,3 +43,11 @@ repository.workspace = true
 
 [lints]
 workspace = true
+
+# The profile the release binaries and wheels build with (dist and maturin both
+# select it, see docs/TEMPLATE.md): smaller, stripped binaries. Nothing changes
+# for `cargo build` / `cargo test`.
+[profile.dist]
+inherits = "release"
+lto = "thin"
+strip = true

@@ -11,9 +11,10 @@
 # "ignore" in a template release rather than deleting the file locally.
 #
 # This started as template-base's own manifest and is itself "merge" tier:
-# template-rust-crate is both an instance of template-base and its own
-# template for further instances, so it edits this file directly, covering its own (larger)
-# tracked-file set, and resolves base's additions by hand -- see that repo's
+# template-rust-cli is an instance of template-rust-crate (itself an instance
+# of template-base) and is also a template for further instances, so it edits
+# this file directly, covering its own (larger) tracked-file set, and
+# resolves its parents' additions by hand -- see that repo's
 # docs/TEMPLATE.md.
 #
 # An instance that isn't itself a template doesn't edit this file; it lists
@@ -111,6 +112,18 @@ replace:
   - scripts/release-publish.sh
   - scripts/release-stamp-version.py
   - scripts/release-stamped.sh
+  # template-rust-cli's own layer on top of the crate template: the binary
+  # release (see docs/TEMPLATE.md, "Rust CLI template notes"). Nothing here
+  # carries per-CLI content (names, versions and metadata come from
+  # Cargo.toml and packaging.toml), so fixes reach every CLI through a sync.
+  # release-binaries.yml is a dispatch-only workflow, not a release.yml job;
+  # when the contract gains an extension point for it, it moves there and
+  # these two lines stay as tombstones.
+  - .github/workflows/build-binaries.yml
+  - .github/workflows/release-binaries.yml
+  - dist-workspace.toml
+  - scripts/binaries/
+  - scripts/test_release_binaries.py
 
 ignore:
   # Each instance chooses its own license and copyright holder.
@@ -144,6 +157,13 @@ ignore:
   - src/
   - tests/
   - deny.toml
+
+  # The CLI's identity in the registries: the Python distribution (pyproject.toml),
+  # the npm package names (packaging.toml) and the pre-commit hook definition
+  # (.pre-commit-hooks.yaml) all carry the CLI's own name and metadata.
+  - pyproject.toml
+  - packaging.toml
+  - .pre-commit-hooks.yaml
 
   # Derived from Cargo.toml; a 3-way merge of a lock file is unreliable, and
   # the dependency set is the instance's own, so an instance regenerates it

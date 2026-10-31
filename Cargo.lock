@@ -3,5 +3,5 @@
 version = 4
 
 [[package]]
-name = "template-rust-crate"
+name = "template-rust-cli"
 version = "0.0.0"

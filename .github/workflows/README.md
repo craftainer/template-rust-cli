@@ -19,6 +19,27 @@
   arch-specific runtime break (e.g. a C-extension dependency missing an
   arm64 wheel), since `checks.yml`'s test run uses `MODE=mock`
   in-process fakes for some paths rather than the built image.
+- `release-binaries.yml` — manually dispatched with a `tag` input, right after
+  each `Release`: `gh workflow run release-binaries.yml -f tag=vX.Y.Z`. Ships
+  the CLI's binaries: attaches the dist archives, their checksums and the
+  Homebrew formula to the GitHub release, and, per repository variable
+  (`CLI_PYPI_PUBLISH`, `CLI_NPM_PUBLISH`, `HOMEBREW_TAP`, `CLI_IMAGE_PUBLISH`),
+  publishes wheels and an sdist to PyPI, the npm packages, the formula to a tap
+  and a container image. It guards on the default-branch ref, the tag shape, a
+  published release and the tag being in the default branch's history; runs one
+  at a time per tag; and can be re-run. The PyPI and npm trusted publishers
+  name this file and the `release` environment. Not automatic, for the reasons
+  in `../../docs/TEMPLATE.md`'s "Rust CLI template notes" (no `workflow_run`,
+  which zizmor flags and this repository does not suppress). A failed run does
+  not undo the release. It calls `build-binaries.yml`; `id-token: write` and
+  `attestations: write` are set in both.
+- `build-binaries.yml` — reusable (`workflow_call`, input `tag`), called by
+  `release-binaries.yml` only. Builds the six targets on native runners with
+  dist (archives) and maturin (wheels), smoke-tests them, then builds the sdist,
+  the npm tarballs and the Homebrew formula, attests every file with
+  `actions/attest` (SLSA Build L3: the build runs in its own workflow) and
+  uploads the `release-binaries` artifact. Publishes nothing and holds no
+  registry credential.
 - `release.yml` — manually triggered. Takes a release channel
   (`alpha`/`beta`/`rc`/`full`) and a SemVer 2 bump
   (`major`/`minor`/`patch`/`none`), computes the next tag via

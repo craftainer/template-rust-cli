@@ -45,6 +45,10 @@ artifact on top of the shape described here.
   below.
 - `.pre-commit-config.yaml` — git hooks, run by `prek` or `pre-commit`;
   language-agnostic hooks only.
+- `dist-workspace.toml`, `pyproject.toml`, `packaging.toml`,
+  `.pre-commit-hooks.yaml`, `scripts/binaries/` — the binary release of the
+  CLI (archives, wheels, npm packages, Homebrew, image, pre-commit hook);
+  see "Rust CLI template notes" below.
 - `CLAUDE.md` — the AI-assisted coding workflow Claude Code follows in
   this repository; general conventions live in this file and each
   directory's own `README.md` instead.
@@ -671,6 +675,134 @@ additions.
   rename its `publish` to `publish-packages`, add it to `.PHONY` and make
   `publish` a no-op. An instance that stays on the old `Makefile` fails
   loudly at `publish-packages` when `CARGO_PUBLISH` is set.
+
+## Rust CLI template notes
+
+`template-rust-cli` extends `template-rust-crate` for a command-line program
+that ships as a binary. The sections above, including "Rust crate template
+notes", still apply (the crate itself is released to crates.io by the
+contract, unchanged); these are the additions. The decisions behind them are
+in `docs/adrs/0002-rust-cli-template.md`.
+
+- **CLI scaffold (instance-owned).** `Cargo.toml`, `Cargo.lock`, `src/`,
+  `tests/`, `deny.toml`, `pyproject.toml`, `packaging.toml` and
+  `.pre-commit-hooks.yaml` are `ignore` tier. The package is a library plus a
+  binary: `src/main.rs` only forwards the process arguments and streams to
+  `run` in `src/lib.rs`, so the whole program is covered by the 100% line
+  gate without spawning a process, and `tests/cli.rs` spawns the real binary
+  once. The README lists every place an instance renames (crate, binary,
+  PyPI distribution, npm names, hook id, formula).
+- **Template-owned tooling (`replace`).** `dist-workspace.toml`,
+  `.github/workflows/build-binaries.yml`, `.github/workflows/release-binaries.yml`,
+  `scripts/binaries/` and `scripts/test_release_binaries.py`. The parent's
+  `Makefile`, `release.yml` and `scripts/release-*` are untouched (byte-identical
+  to `template-rust-crate`): the contract release stays the crates.io source
+  release, and the binaries are a second, manual step on top of it.
+- **The release is two steps.** (1) `Release` (the contract, `release.yml`)
+  tags the commit, publishes the crate and creates the GitHub release.
+  (2) Right after it succeeds, the release lander runs
+  `gh workflow run release-binaries.yml -f tag=vX.Y.Z` and watches the run.
+  Step 2 is not automatic: `workflow_run` is a zizmor finding this repository
+  does not suppress (see "Checks"), and a release created with `GITHUB_TOKEN`
+  starts no other workflow. It is idempotent: one run per tag at a time
+  (`concurrency`), `gh release upload --clobber`, `uv publish --check-url`
+  and `publish-npm.sh` skip what a registry already has. It refuses to run
+  from any ref but the default branch, for a tag that is not
+  `vX.Y.Z[-prerelease]`, for a draft or missing release, or for a tag outside
+  the default branch's history. When the contract gains an extension point
+  for it, the workflow moves into `release.yml` and a tombstone line in the
+  sync manifest removes the file from every CLI.
+- **Targets.** Six, from one list (`scripts/binaries/targets.json`, checked
+  against `dist-workspace.toml` and the build matrix by
+  `scripts/test_release_binaries.py`): `x86_64`/`aarch64-unknown-linux-musl`
+  (static, on `ubuntu-24.04` and `ubuntu-24.04-arm`),
+  `x86_64`/`aarch64-apple-darwin` (both on `macos-15`, an arm64 runner, so
+  the Intel binary is cross-compiled and smoke-tested under Rosetta when the
+  runner has it) and
+  `x86_64`/`aarch64-pc-windows-msvc` (`windows-2025`, `windows-11-arm`;
+  GitHub-hosted runners are free for public repositories). Each target builds
+  natively on its own runner. A dependency with C code needs the musl
+  toolchain (`musl-tools` is installed) and may need extra setup: add it to
+  the build steps, they are template-owned, so change the template.
+- **Build, archive, checksum: dist 0.33.1.** `dist build --artifacts=local
+  --target <triple>` per target, driven by `dist-workspace.toml`
+  (`installers = []`, `ci` unset, so no generated CI and no installers; the
+  archive is `<binary>-<triple>.tar.gz` or `.zip` with the binary, `LICENSE`
+  and `README.md`, plus a `.sha256`). dist's own npm installer is not used:
+  it downloads the binary at install time, which breaks offline installs.
+  The version is stamped from the tag into `Cargo.toml`/`Cargo.lock` first
+  (as `release-stamped.sh` does), because dist requires the tag to equal the
+  package version. dist and maturin are downloaded by
+  `release_binaries.py install-tool` and checked against SHA-256s pinned in
+  that file; to bump one, change its version and hashes there (the release
+  API's `digest` field lists them) and `cargo-dist-version`.
+- **Attestations (SLSA Build L3).** `release-binaries.yml` calls
+  `build-binaries.yml` (`workflow_call`), which builds and runs
+  `actions/attest` (v4, build provenance) over every archive, wheel, sdist and
+  npm tarball. The build runs in a reusable workflow, isolated from the caller,
+  which is what makes it L3. `id-token: write` and `attestations: write` are
+  set on the calling job and in the callee, because a called workflow can't
+  hold permissions its caller withheld. Verify a download with
+  `gh attestation verify <file> --repo <owner>/<repo>`. The callee publishes
+  nothing and holds no registry credential.
+- **PyPI: maturin `bindings = "bin"`.** `pyproject.toml` makes `maturin build`
+  wrap the crate's executable in a wheel (`pip install <name>` puts it on
+  `PATH`; there is no Python code). One wheel per target plus an sdist, built
+  with Cargo's `dist` profile. The Linux wheels carry both tag sets
+  (`--compatibility manylinux2014 musllinux_1_2`), so the one static binary
+  installs on glibc and musl hosts. The publish job runs
+  `astral-sh/attest-action` (PEP 740 attestations signed with the job's OIDC
+  identity) and then `uv publish --trusted-publishing always --check-url`,
+  which uploads the `*.publish.attestation` files it finds beside the
+  distributions; `uv publish` does not generate them itself.
+- **npm: optionalDependencies, no install script.** Six
+  `<scope>/<binary>-<os>-<cpu>` packages (`os` and `cpu` use npm's names:
+  `linux`/`darwin`/`win32`, `x64`/`arm64`) each hold one binary; the root
+  package has a small launcher (`scripts/binaries/launcher.js`) and exact-pinned
+  `optionalDependencies` on all six. npm installs only the one whose `os` and
+  `cpu` match, the launcher runs it. The Linux packages have no `libc` field
+  on purpose: npm installs a package with `libc` only on a matching libc,
+  and the static musl binary runs on both, so one package per CPU serves
+  glibc and musl. `build-binaries.yml` smoke-tests the launcher against the
+  packed Linux tarballs.
+- **Publishing needs one-time setup per CLI** (the release lander's job list,
+  not the template's). Create the GitHub environment `release`. Register
+  trusted publishers that name the workflow **`release-binaries.yml`** (and
+  environment `release`): on PyPI (a pending publisher works for the first
+  release) and on npm for the root and the six platform packages. npm has no
+  pending publishers, so the first publish of all seven uses the family's
+  staged path: set the secret `NPM_TOKEN` (a stage-only token), let the job
+  stage them, approve each with 2FA, add the trusted publishers, delete the
+  token. crates.io's trusted publisher names `release.yml`, as in "Rust crate
+  template notes".
+- **Switches (repository variables).** `CLI_PYPI_PUBLISH` (`pypi` or
+  `testpypi`), `CLI_NPM_PUBLISH`, `HOMEBREW_TAP` (`<owner>/homebrew-<tap>`,
+  with the secret `HOMEBREW_TAP_TOKEN`) and `CLI_IMAGE_PUBLISH` each turn one
+  job on; unset, the job does not run. The GitHub release assets always
+  upload. These are not the contract's `*_PUBLISH` variables, which would
+  also make the parent's `release.yml` create publish jobs.
+- **Homebrew.** `release_binaries.py brew` writes the formula from the
+  archives' checksums; it is attached to the GitHub release, and the tap job
+  commits it to `Formula/` when `HOMEBREW_TAP` is set. The formula's `test`
+  runs `<binary> --version` and expects the version in the output.
+- **Container image.** `scripts/binaries/Dockerfile` copies the static binary
+  into `scratch` (no shell, no CA certificates; the file says how to switch to
+  a digest-pinned distroless static base for a CLI that needs TLS), non-root.
+  The `image` job builds it for `linux/amd64` and `linux/arm64` from the
+  attested archives, never from source, pushes `ghcr.io/<owner>/<repo>` with
+  `GITHUB_TOKEN` and attests the digest.
+- **pre-commit / prek hook.** `.pre-commit-hooks.yaml` defines a hook with
+  `language: rust`, which builds the tagged source on demand.
+- **Checks.** `scripts/test_release_binaries.py` (hook
+  `release-binaries-tests`, so CI's `prek` runs it) covers the target lists,
+  the tool install and checksum, the dispatch guard, the npm and Homebrew
+  generators, `publish-npm.sh` against a fake `npm`, and workflow invariants
+  (dispatch-only trigger, every action pinned by SHA, publishing only in the
+  caller behind `environment: release`, attestation permissions on both
+  sides). What only a real runner can prove (the macOS and Windows builds, the
+  registries) is proven by the first dispatch of the workflow.
+- **Syncing.** A CLI follows this template. `.github/template-sync-state.json`
+  in a new CLI must name this repository and the tag it was created at.
 
 ## Code style
 

@@ -1,0 +1,35 @@
+# dist (https://axodotdev.github.io/cargo-dist/) as the build, archive and
+# checksum engine for the release binaries, and nothing more: no installers
+# and no generated CI (`ci` is left at its default, empty). The release
+# workflows are .github/workflows/release-binaries.yml and build-binaries.yml,
+# which run `dist build --artifacts=local --target <triple>` once per target
+# on a matching runner. See docs/TEMPLATE.md, "Rust CLI template notes".
+#
+# The package, its version and its binary come from Cargo.toml; the version
+# there is stamped from the release tag at build time. Keep `targets` in step
+# with scripts/binaries/targets.json (scripts/test_release_binaries.py checks).
+
+[workspace]
+members = ["cargo:."]
+
+# Config for 'dist'
+[dist]
+# The dist version the release workflows install (scripts/binaries/tool_install.py
+# pins its SHA-256s); bump both together.
+cargo-dist-version = "0.33.1"
+# No installers: npm, PyPI and Homebrew packaging is done by our own scripts
+# (dist's npm installer downloads the binary at install time, which breaks
+# offline installs).
+installers = []
+# Static musl on Linux; macOS and Windows on both CPU families.
+targets = [
+    "x86_64-unknown-linux-musl",
+    "aarch64-unknown-linux-musl",
+    "x86_64-apple-darwin",
+    "aarch64-apple-darwin",
+    "x86_64-pc-windows-msvc",
+    "aarch64-pc-windows-msvc",
+]
+unix-archive = ".tar.gz"
+windows-archive = ".zip"
+checksum = "sha256"

@@ -195,6 +195,14 @@ repos:
         files: ^(Makefile|scripts/(release-[a-z-]+\.(sh|py)|test_release_contract\.py))$
         stages: [pre-commit, manual]
 
+      - id: release-binaries-tests
+        name: binary release tests (targets, packaging, publish-npm.sh, workflows)
+        entry: python3 -I scripts/test_release_binaries.py
+        language: system
+        pass_filenames: false
+        files: ^(scripts/(binaries/|test_release_binaries\.py)|dist-workspace\.toml|pyproject\.toml|packaging\.toml|\.pre-commit-hooks\.yaml|Cargo\.toml|\.github/workflows/(build|release)-binaries\.yml)
+        stages: [pre-commit, manual]
+
   # Supply-chain/secret scanners (OWASP A01/A03/A04/A08 -- see
   # docs/TEMPLATE.md's "Checks"). Revs are tags, not SHAs: Renovate's
   # pre-commit manager bumps tags directly, and a SHA + "# frozen: vX"

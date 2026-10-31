@@ -25,6 +25,9 @@
   version pinned in `scripts/develop.d/10-rust.sh`, `rust-toolchain.toml`
   and Cargo.toml's `rust-version` is one "rust toolchain" group that moves
   all three together and is not automerged.
+  The dist and maturin versions the binary release installs are pinned with
+  SHA-256s in `scripts/binaries/release_binaries.py`, so Renovate does not
+  manage them: a bump edits the version and the hashes together.
 - `ISSUE_TEMPLATE/` — issue forms (bug report, feature request) shown
   when opening a new issue.
 - `PULL_REQUEST_TEMPLATE.md` — prefills the description box for new PRs.
