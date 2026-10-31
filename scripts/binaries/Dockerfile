@@ -1,8 +1,9 @@
 # The release image: the static musl binary on an empty root file system.
 # Built by .github/workflows/release-binaries.yml (the `image` job) from the
 # attested release archives, never from source. This file is a template:
-# `release_binaries.py stage-image` replaces @BINARY@ with the crate's binary
-# name and writes the result into the build context beside the binaries:
+# `release_binaries.py stage-image` substitutes the crate's binary name for the
+# placeholder on the COPY and ENTRYPOINT lines and writes the result into the
+# build context beside the binaries:
 #   Dockerfile  linux-amd64/<binary>  linux-arm64/<binary>
 # (ENTRYPOINT's exec form cannot expand a build argument, hence the rendering.)
 #

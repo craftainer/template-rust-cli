@@ -495,6 +495,10 @@ class StageImage(unittest.TestCase):
         self.assertIn("COPY --chmod=0555 linux-${TARGETARCH}/template-rust-cli /template-rust-cli", text)
         self.assertIn('ENTRYPOINT ["/template-rust-cli"]', text)
 
+    def test_a_binary_name_that_breaks_the_dockerfile_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp, self.assertRaises(rb.Error):
+            rb.stage_image(Path(tmp), Path(tmp) / "out", {"binary": 'a"b'})
+
     def test_a_renamed_crate_gets_its_own_binary_in_the_image(self):
         with tempfile.TemporaryDirectory() as tmp:
             root, archives, out = Path(tmp) / "r", Path(tmp) / "a", Path(tmp) / "out"

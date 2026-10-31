@@ -20,9 +20,10 @@ Commands:
   brew --version V --archives DIR --out FILE
                                      write the Homebrew formula
   stage-image --archives DIR --out DIR
-                                     lay out the Linux binaries as the Docker
-                                     build context scripts/binaries/Dockerfile
-                                     expects (linux-amd64/cli, linux-arm64/cli)
+                                     lay out the Linux binaries and a Dockerfile
+                                     rendered from scripts/binaries/Dockerfile
+                                     for the binary's name as the Docker build
+                                     context (build it with its own Dockerfile)
 
 DIR for --archives holds dist's `<binary>-<target>.(tar.gz|zip)` archives and
 their `.sha256` files. Project facts come from Cargo.toml and packaging.toml
@@ -382,6 +383,9 @@ def build_formula(version: str, archives: Path, project: dict) -> str:
 
 def stage_image(archives: Path, out: Path, project: dict) -> list[Path]:
     binary = project["binary"]
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", binary):
+        raise Error(f"the binary name {binary!r} cannot go into a Dockerfile; use letters, digits, '.', '_' and '-'")
+    out.mkdir(parents=True, exist_ok=True)
     staged = []
     for target in load_targets():
         if not target["target"].endswith("unknown-linux-musl"):
