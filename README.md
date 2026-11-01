@@ -53,7 +53,8 @@ for why it is built this way.
    name. Nothing else names the CLI: the workflows, `dist-workspace.toml`
    and `scripts/binaries/` read the name from `Cargo.toml` and
    `packaging.toml`, and are template-owned (the container image's
-   `/<binary>` included).
+   `/<binary>` included), as is `scripts/test_release_binaries.py`, which
+   derives every name and npm scope it expects from those two files.
 3. Point template sync at this template. `.github/template-sync-state.json`
    here records the `template-rust-crate` tag this template itself last synced
    from; the copy in a new CLI must instead name this repository and the tag

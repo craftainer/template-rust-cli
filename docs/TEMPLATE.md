@@ -694,7 +694,9 @@ in `docs/adrs/0002-rust-cli-template.md`.
   PyPI distribution, npm names, hook id, formula).
 - **Template-owned tooling (`replace`).** `dist-workspace.toml`,
   `.github/workflows/build-binaries.yml`, `.github/workflows/release-binaries.yml`,
-  `scripts/binaries/` and `scripts/test_release_binaries.py`. The parent's
+  `scripts/binaries/` and `scripts/test_release_binaries.py` (which takes the
+  crate, binary and npm names from `Cargo.toml` and `packaging.toml`, so it
+  passes unchanged in a renamed instance). The parent's
   `Makefile`, `release.yml` and `scripts/release-*` are untouched (byte-identical
   to `template-rust-crate`): the contract release stays the crates.io source
   release, and the binaries are a second, manual step on top of it.
