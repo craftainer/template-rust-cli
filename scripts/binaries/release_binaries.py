@@ -20,9 +20,10 @@ Commands:
   brew --version V --archives DIR --out FILE
                                      write the Homebrew formula
   stage-image --archives DIR --out DIR
-                                     lay out the Linux binaries as the Docker
-                                     build context scripts/binaries/Dockerfile
-                                     expects (linux-amd64/cli, linux-arm64/cli)
+                                     lay out the Linux binaries and a Dockerfile
+                                     rendered from scripts/binaries/Dockerfile
+                                     for the binary's name as the Docker build
+                                     context (build it with its own Dockerfile)
 
 DIR for --archives holds dist's `<binary>-<target>.(tar.gz|zip)` archives and
 their `.sha256` files. Project facts come from Cargo.toml and packaging.toml
@@ -382,14 +383,21 @@ def build_formula(version: str, archives: Path, project: dict) -> str:
 
 def stage_image(archives: Path, out: Path, project: dict) -> list[Path]:
     binary = project["binary"]
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", binary):
+        raise Error(f"the binary name {binary!r} cannot go into a Dockerfile; use letters, digits, '.', '_' and '-'")
+    out.mkdir(parents=True, exist_ok=True)
     staged = []
     for target in load_targets():
         if not target["target"].endswith("unknown-linux-musl"):
             continue
         arch = {"x64": "amd64", "arm64": "arm64"}[target["npm_cpu"]]
-        dest = out / f"linux-{arch}" / "cli"
+        dest = out / f"linux-{arch}" / binary
         write_executable(dest, extract_binary(archives / archive_name(binary, target), binary))
         staged.append(dest)
+    dockerfile = (Path(__file__).resolve().parent / "Dockerfile").read_text(encoding="utf-8")
+    if "@BINARY@" not in dockerfile:
+        raise Error("scripts/binaries/Dockerfile has no @BINARY@ placeholder to render")
+    (out / "Dockerfile").write_text(dockerfile.replace("@BINARY@", binary), encoding="utf-8")
     return staged
 
 

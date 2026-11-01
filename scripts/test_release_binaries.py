@@ -473,16 +473,52 @@ class StageImage(unittest.TestCase):
             archives.mkdir()
             make_all_archives(archives)
             staged = rb.stage_image(archives, out, rb.load_project())
-            self.assertEqual(sorted(p.relative_to(out).as_posix() for p in staged), ["linux-amd64/cli", "linux-arm64/cli"])
+            self.assertEqual(sorted(p.relative_to(out).as_posix() for p in staged), ["linux-amd64/template-rust-cli", "linux-arm64/template-rust-cli"])
             for path in staged:
                 self.assertEqual(path.read_bytes(), FAKE_BINARY)
                 self.assertTrue(path.stat().st_mode & stat.S_IXUSR)
 
-    def test_dockerfile_matches_the_context_layout(self):
+    def test_dockerfile_template_matches_the_context_layout(self):
         text = (BIN / "Dockerfile").read_text(encoding="utf-8")
-        self.assertIn("COPY --chmod=0555 linux-${TARGETARCH}/cli /cli", text)
-        self.assertIn('ENTRYPOINT ["/cli"]', text)
+        self.assertIn("COPY --chmod=0555 linux-${TARGETARCH}/@BINARY@ /@BINARY@", text)
+        self.assertIn('ENTRYPOINT ["/@BINARY@"]', text)
         self.assertIn("USER 65532:65532", text)
+
+    def test_the_context_dockerfile_is_rendered_with_the_binary_name(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            archives, out = Path(tmp) / "a", Path(tmp) / "out"
+            archives.mkdir()
+            make_all_archives(archives)
+            rb.stage_image(archives, out, rb.load_project())
+            text = (out / "Dockerfile").read_text(encoding="utf-8")
+        self.assertNotIn("@BINARY@", text)
+        self.assertIn("COPY --chmod=0555 linux-${TARGETARCH}/template-rust-cli /template-rust-cli", text)
+        self.assertIn('ENTRYPOINT ["/template-rust-cli"]', text)
+
+    def test_a_binary_name_that_breaks_the_dockerfile_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp, self.assertRaises(rb.Error):
+            rb.stage_image(Path(tmp), Path(tmp) / "out", {"binary": 'a"b'})
+        for bad in ("a b", "a\n", "-a", "a$b", "a\\b"):
+            with self.subTest(bad=bad), self.assertRaises(rb.Error):
+                rb.stage_image(Path("."), Path("."), {"binary": bad})
+
+    def test_a_renamed_crate_gets_its_own_binary_in_the_image(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root, archives, out = Path(tmp) / "r", Path(tmp) / "a", Path(tmp) / "out"
+            root.mkdir()
+            archives.mkdir()
+            (root / "Cargo.toml").write_text(
+                '[package]\nname = "modfence-cli"\nversion = "1.0.0"\nrepository = "https://github.com/o/r"\n'
+                '[[bin]]\nname = "modfence"\npath = "src/main.rs"\n'
+            )
+            (root / "packaging.toml").write_text('[npm]\npackage = "modfence"\nscope = "@o"\n')
+            make_all_archives(archives, binary="modfence")
+            staged = rb.stage_image(archives, out, rb.load_project(root))
+            self.assertEqual(sorted(p.relative_to(out).as_posix() for p in staged), ["linux-amd64/modfence", "linux-arm64/modfence"])
+            text = (out / "Dockerfile").read_text(encoding="utf-8")
+        self.assertIn("linux-${TARGETARCH}/modfence /modfence", text)
+        self.assertIn('ENTRYPOINT ["/modfence"]', text)
+        self.assertNotIn("template-rust-cli", text)
 
 
 class PublishNpm(unittest.TestCase):
