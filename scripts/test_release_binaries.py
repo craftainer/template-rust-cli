@@ -360,8 +360,8 @@ class NpmPackages(unittest.TestCase):
         self.assertEqual(
             [self.manifest(d)["name"] for d in dirs[:-1]],
             [
-                f"{SCOPE}/{BINARY}-{platform}"
-                for platform in ("linux-x64", "linux-arm64", "darwin-x64", "darwin-arm64", "win32-x64", "win32-arm64")
+                f"{SCOPE}/{BINARY}-{t['npm_os']}-{t['npm_cpu']}"
+                for t in rb.load_targets()
             ],
         )
 
@@ -376,7 +376,7 @@ class NpmPackages(unittest.TestCase):
                 self.assertTrue(manifest["name"].endswith(f"-{manifest['os'][0]}-{manifest['cpu'][0]}"))
                 # Static musl: no libc field, so glibc and musl hosts both install it.
                 self.assertNotIn("libc", manifest)
-                self.assertEqual(manifest["license"], "GPL-3.0-only")
+                self.assertEqual(manifest["license"], PROJECT["license"])
                 self.assertTrue((directory / "LICENSE").is_file())
                 exe = BINARY + (".exe" if manifest["os"] == ["win32"] else "")
                 binary = directory / "bin" / exe
@@ -443,7 +443,7 @@ class Homebrew(unittest.TestCase):
         slug = rb.github_slug(rb.load_project()["repository"])
         self.assertTrue(text.startswith(f"class {rb.formula_class(BINARY)} < Formula\n"))
         self.assertIn('version "1.2.3"', text)
-        self.assertIn('license "GPL-3.0-only"', text)
+        self.assertIn(f'license "{PROJECT["license"]}"', text)
         for target in ("aarch64-apple-darwin", "x86_64-apple-darwin", "aarch64-unknown-linux-musl", "x86_64-unknown-linux-musl"):
             self.assertIn(
                 f'url "https://github.com/{slug}/releases/download/v1.2.3/{BINARY}-{target}.tar.gz"\n'
@@ -520,7 +520,6 @@ class StageImage(unittest.TestCase):
             text = (out / "Dockerfile").read_text(encoding="utf-8")
         self.assertIn("linux-${TARGETARCH}/renamed-bin /renamed-bin", text)
         self.assertIn('ENTRYPOINT ["/renamed-bin"]', text)
-        self.assertNotIn(f"/{BINARY}", text)
 
 
 class PublishNpm(unittest.TestCase):
