@@ -33,7 +33,13 @@ rb = importlib.util.module_from_spec(spec)
 sys.modules["release_binaries"] = rb
 spec.loader.exec_module(rb)
 
-FAKE_BINARY = b"#!/bin/sh\necho 'template-rust-cli 1.2.3'\n"
+# Every name below comes from the project's own Cargo.toml and packaging.toml, so
+# these tests hold for any crate name and npm scope (an instance renames both).
+PROJECT = rb.load_project()
+BINARY = PROJECT["binary"]
+SCOPE = PROJECT["npm_scope"]
+NPM_ROOT = PROJECT["npm_package"]
+FAKE_BINARY = f"#!/bin/sh\necho '{BINARY} 1.2.3'\n".encode()
 
 
 def run(cmd, env=None, **kw):
@@ -42,7 +48,7 @@ def run(cmd, env=None, **kw):
     )
 
 
-def make_archive(directory: Path, target: dict, binary: str = "template-rust-cli", payload: bytes = FAKE_BINARY):
+def make_archive(directory: Path, target: dict, binary: str = BINARY, payload: bytes = FAKE_BINARY):
     """A dist-shaped archive (one top-level directory) plus its .sha256 file."""
     name = rb.archive_name(binary, target)
     path = directory / name
@@ -63,7 +69,7 @@ def make_archive(directory: Path, target: dict, binary: str = "template-rust-cli
     return path, digest
 
 
-def make_all_archives(directory: Path, binary: str = "template-rust-cli"):
+def make_all_archives(directory: Path, binary: str = BINARY):
     return {t["target"]: make_archive(directory, t, binary) for t in rb.load_targets()}
 
 
@@ -302,7 +308,7 @@ class Archives(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             for target in rb.load_targets():
                 path, _ = make_archive(Path(tmp), target)
-                self.assertEqual(rb.extract_binary(path, "template-rust-cli" + target["exe"]), FAKE_BINARY)
+                self.assertEqual(rb.extract_binary(path, BINARY + target["exe"]), FAKE_BINARY)
 
     def test_missing_binary_is_an_error(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -313,15 +319,15 @@ class Archives(unittest.TestCase):
     def test_smoke_runs_the_binary(self):
         with tempfile.TemporaryDirectory() as tmp:
             path, _ = make_archive(Path(tmp), rb.load_targets()[0])
-            self.assertEqual(rb.smoke(path, "1.2.3", "template-rust-cli"), "template-rust-cli 1.2.3")
+            self.assertEqual(rb.smoke(path, "1.2.3", BINARY), f"{BINARY} 1.2.3")
             with self.assertRaisesRegex(rb.Error, "expected it to contain 9.9.9"):
-                rb.smoke(path, "9.9.9", "template-rust-cli")
+                rb.smoke(path, "9.9.9", BINARY)
 
     def test_smoke_reports_a_failing_binary(self):
         with tempfile.TemporaryDirectory() as tmp:
             path, _ = make_archive(Path(tmp), rb.load_targets()[0], payload=b"#!/bin/sh\nexit 3\n")
             with self.assertRaisesRegex(rb.Error, "exited 3"):
-                rb.smoke(path, "1.2.3", "template-rust-cli")
+                rb.smoke(path, "1.2.3", BINARY)
 
     def test_sha256_file_must_name_its_archive(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -354,12 +360,8 @@ class NpmPackages(unittest.TestCase):
         self.assertEqual(
             [self.manifest(d)["name"] for d in dirs[:-1]],
             [
-                "@craftainer/template-rust-cli-linux-x64",
-                "@craftainer/template-rust-cli-linux-arm64",
-                "@craftainer/template-rust-cli-darwin-x64",
-                "@craftainer/template-rust-cli-darwin-arm64",
-                "@craftainer/template-rust-cli-win32-x64",
-                "@craftainer/template-rust-cli-win32-arm64",
+                f"{SCOPE}/{BINARY}-{platform}"
+                for platform in ("linux-x64", "linux-arm64", "darwin-x64", "darwin-arm64", "win32-x64", "win32-arm64")
             ],
         )
 
@@ -376,7 +378,7 @@ class NpmPackages(unittest.TestCase):
                 self.assertNotIn("libc", manifest)
                 self.assertEqual(manifest["license"], "GPL-3.0-only")
                 self.assertTrue((directory / "LICENSE").is_file())
-                exe = "template-rust-cli" + (".exe" if manifest["os"] == ["win32"] else "")
+                exe = BINARY + (".exe" if manifest["os"] == ["win32"] else "")
                 binary = directory / "bin" / exe
                 self.assertEqual(binary.read_bytes(), FAKE_BINARY)
                 self.assertTrue(binary.stat().st_mode & stat.S_IXUSR)
@@ -384,15 +386,15 @@ class NpmPackages(unittest.TestCase):
     def test_root_package_pins_every_platform_package_exactly(self):
         dirs, _ = self.build("1.2.3-rc.1")
         root = self.manifest(dirs[-1])
-        self.assertEqual(root["name"], "template-rust-cli")
-        self.assertEqual(root["bin"], {"template-rust-cli": "bin/template-rust-cli.js"})
+        self.assertEqual(root["name"], NPM_ROOT)
+        self.assertEqual(root["bin"], {BINARY: f"bin/{BINARY}.js"})
         self.assertEqual(
             root["optionalDependencies"], {self.manifest(d)["name"]: "1.2.3-rc.1" for d in dirs[:-1]}
         )
         self.assertEqual(root["files"], ["bin/", "LICENSE", "README.md"])
         self.assertNotIn("postinstall", json.dumps(root))
         self.assertNotIn("scripts", root)
-        launcher = dirs[-1] / "bin" / "template-rust-cli.js"
+        launcher = dirs[-1] / "bin" / f"{BINARY}.js"
         self.assertEqual(launcher.read_bytes(), (BIN / "launcher.js").read_bytes())
         self.assertTrue(launcher.stat().st_mode & stat.S_IXUSR)
 
@@ -420,13 +422,13 @@ class NpmPackages(unittest.TestCase):
             matching = [d for d in dirs[:-1] if d.name.endswith(f"-{node_os}-{cpu}")]
             if not matching:
                 self.skipTest(f"no platform package for {node_os}-{cpu}")
-            installed = modules / "@craftainer" / matching[0].name
+            installed = modules / SCOPE / matching[0].name
             installed.parent.mkdir(parents=True)
             os.rename(matching[0], installed)
-            os.rename(root, modules / "template-rust-cli")
-            launcher = modules / "template-rust-cli" / "bin" / "template-rust-cli.js"
+            os.rename(root, modules / NPM_ROOT)
+            launcher = modules / NPM_ROOT / "bin" / f"{BINARY}.js"
             result = run(["node", str(launcher), "--version"])
-            self.assertEqual((result.returncode, result.stdout.strip()), (0, "template-rust-cli 1.2.3"))
+            self.assertEqual((result.returncode, result.stdout.strip()), (0, f"{BINARY} 1.2.3"))
             os.rename(installed, installed.with_name("gone"))
             missing = run(["node", str(launcher)])
             self.assertEqual(missing.returncode, 1)
@@ -439,18 +441,18 @@ class Homebrew(unittest.TestCase):
             made = make_all_archives(Path(tmp))
             text = rb.build_formula("1.2.3", Path(tmp), rb.load_project())
         slug = rb.github_slug(rb.load_project()["repository"])
-        self.assertTrue(text.startswith("class TemplateRustCli < Formula\n"))
+        self.assertTrue(text.startswith(f"class {rb.formula_class(BINARY)} < Formula\n"))
         self.assertIn('version "1.2.3"', text)
         self.assertIn('license "GPL-3.0-only"', text)
         for target in ("aarch64-apple-darwin", "x86_64-apple-darwin", "aarch64-unknown-linux-musl", "x86_64-unknown-linux-musl"):
             self.assertIn(
-                f'url "https://github.com/{slug}/releases/download/v1.2.3/template-rust-cli-{target}.tar.gz"\n'
+                f'url "https://github.com/{slug}/releases/download/v1.2.3/{BINARY}-{target}.tar.gz"\n'
                 f'      sha256 "{made[target][1]}"',
                 text,
             )
         self.assertNotIn("windows", text)
-        self.assertIn('bin.install "template-rust-cli"', text)
-        self.assertIn('shell_output("#{bin}/template-rust-cli --version")', text)
+        self.assertIn(f'bin.install "{BINARY}"', text)
+        self.assertIn(f'shell_output("#{{bin}}/{BINARY} --version")', text)
         # every `do` block, plus `def install` and the class, closes with an `end`
         self.assertEqual(text.count(" do\n") + 2, text.count("end\n"))
 
@@ -473,7 +475,7 @@ class StageImage(unittest.TestCase):
             archives.mkdir()
             make_all_archives(archives)
             staged = rb.stage_image(archives, out, rb.load_project())
-            self.assertEqual(sorted(p.relative_to(out).as_posix() for p in staged), ["linux-amd64/template-rust-cli", "linux-arm64/template-rust-cli"])
+            self.assertEqual(sorted(p.relative_to(out).as_posix() for p in staged), [f"linux-amd64/{BINARY}", f"linux-arm64/{BINARY}"])
             for path in staged:
                 self.assertEqual(path.read_bytes(), FAKE_BINARY)
                 self.assertTrue(path.stat().st_mode & stat.S_IXUSR)
@@ -492,8 +494,8 @@ class StageImage(unittest.TestCase):
             rb.stage_image(archives, out, rb.load_project())
             text = (out / "Dockerfile").read_text(encoding="utf-8")
         self.assertNotIn("@BINARY@", text)
-        self.assertIn("COPY --chmod=0555 linux-${TARGETARCH}/template-rust-cli /template-rust-cli", text)
-        self.assertIn('ENTRYPOINT ["/template-rust-cli"]', text)
+        self.assertIn(f"COPY --chmod=0555 linux-${{TARGETARCH}}/{BINARY} /{BINARY}", text)
+        self.assertIn(f'ENTRYPOINT ["/{BINARY}"]', text)
 
     def test_a_binary_name_that_breaks_the_dockerfile_is_refused(self):
         with tempfile.TemporaryDirectory() as tmp, self.assertRaises(rb.Error):
@@ -508,17 +510,17 @@ class StageImage(unittest.TestCase):
             root.mkdir()
             archives.mkdir()
             (root / "Cargo.toml").write_text(
-                '[package]\nname = "modfence-cli"\nversion = "1.0.0"\nrepository = "https://github.com/o/r"\n'
-                '[[bin]]\nname = "modfence"\npath = "src/main.rs"\n'
+                '[package]\nname = "renamed-crate"\nversion = "1.0.0"\nrepository = "https://github.com/o/r"\n'
+                '[[bin]]\nname = "renamed-bin"\npath = "src/main.rs"\n'
             )
-            (root / "packaging.toml").write_text('[npm]\npackage = "modfence"\nscope = "@o"\n')
-            make_all_archives(archives, binary="modfence")
+            (root / "packaging.toml").write_text('[npm]\npackage = "renamed-bin"\nscope = "@o"\n')
+            make_all_archives(archives, binary="renamed-bin")
             staged = rb.stage_image(archives, out, rb.load_project(root))
-            self.assertEqual(sorted(p.relative_to(out).as_posix() for p in staged), ["linux-amd64/modfence", "linux-arm64/modfence"])
+            self.assertEqual(sorted(p.relative_to(out).as_posix() for p in staged), ["linux-amd64/renamed-bin", "linux-arm64/renamed-bin"])
             text = (out / "Dockerfile").read_text(encoding="utf-8")
-        self.assertIn("linux-${TARGETARCH}/modfence /modfence", text)
-        self.assertIn('ENTRYPOINT ["/modfence"]', text)
-        self.assertNotIn("template-rust-cli", text)
+        self.assertIn("linux-${TARGETARCH}/renamed-bin /renamed-bin", text)
+        self.assertIn('ENTRYPOINT ["/renamed-bin"]', text)
+        self.assertNotIn(f"/{BINARY}", text)
 
 
 class PublishNpm(unittest.TestCase):
