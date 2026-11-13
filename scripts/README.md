@@ -48,8 +48,12 @@
   `Cargo.toml`/`Cargo.lock` (restored afterwards) using
   `release-stamp-version.py`. It runs `cargo fetch --locked` first, because
   the stamp's `cargo update --offline` needs the locked dependencies in the
-<<<<<<< /home/runner/work/template-rust-cli/template-rust-cli/scripts/README.md
-  local registry cache, which a fresh runner lacks.
+  local registry cache, which a fresh runner lacks; both `cargo` calls run
+  scrubbed.
+- `lib/cargo-scrub.sh` — `scrubbed [--keep NAME] <command>...`, the credential
+  scrub the release scripts share (sourced, or run as
+  `scripts/lib/cargo-scrub.sh <command>...`); `test_release_scrub.py` records
+  each `cargo` call's environment with a stub `cargo`.
 - `binaries/` (+ `test_release_binaries.py`, run by a hook) — the CLI's binary
   release (`docs/TEMPLATE.md`, "Rust CLI template notes"):
   `release_binaries.py` is the one implementation of the pinned dist/maturin
@@ -62,14 +66,6 @@
   the root package (staged with a bootstrap token, else through trusted
   publishing); `Dockerfile` is the `scratch` release image. Run the Python
   with `python3 -I`.
-=======
-  local registry cache, which a fresh runner lacks; both `cargo` calls run
-  scrubbed.
-- `lib/cargo-scrub.sh` — `scrubbed [--keep NAME] <command>...`, the credential
-  scrub the release scripts share (sourced, or run as
-  `scripts/lib/cargo-scrub.sh <command>...`); `test_release_scrub.py` records
-  each `cargo` call's environment with a stub `cargo`.
->>>>>>> /tmp/template-new/scripts/README.md
 - `develop.d/`, `post-create.d/` — instance hook directories, empty apart
   from their own `README.md`; see `docs/TEMPLATE.md`'s "Instance extension
   points".
