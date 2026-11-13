@@ -340,6 +340,66 @@ class Archives(unittest.TestCase):
                 rb.read_sha256_file(path, "x.tar.gz")
 
 
+class SizeGate(unittest.TestCase):
+    """MAX_ARCHIVE_MIB: opt-in cap on each archive's size."""
+
+    def archive(self, tmp, size):
+        path = Path(tmp) / "tool-x86_64-unknown-linux-musl.tar.gz"
+        path.write_bytes(b"\0" * size)
+        return path
+
+    def test_unset_or_blank_prints_sizes_and_never_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = self.archive(tmp, 3 * rb.MIB)
+            for limit in (None, "", "  "):
+                with self.subTest(limit=limit):
+                    self.assertEqual(rb.check_sizes([path], limit), [f"{path.name}: 3.00 MiB ({3 * rb.MIB} bytes)"])
+
+    def test_under_and_exactly_at_the_limit_pass(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = self.archive(tmp, 3 * rb.MIB)
+            self.assertEqual(len(rb.check_sizes([path], "4")), 1)
+            self.assertEqual(len(rb.check_sizes([path], "3")), 1)
+            self.assertEqual(len(rb.check_sizes([path], "3.5")), 1)
+
+    def test_over_the_limit_fails_naming_the_archive(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = self.archive(tmp, 3 * rb.MIB + 1)
+            with self.assertRaisesRegex(rb.Error, rf"{path.name} is 3.00 MiB, over the 3 MiB limit"):
+                rb.check_sizes([path], "3")
+
+    def test_non_numeric_or_non_positive_limit_fails_closed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = self.archive(tmp, 10)
+            for limit in ("thirty", "30MiB", "-1", "0", "0.0", "1e3", "NaN", "1.", ".5"):
+                with self.subTest(limit=limit), self.assertRaisesRegex(rb.Error, "positive number"):
+                    rb.check_sizes([path], limit)
+
+    def test_cli_reads_the_variable_from_the_environment(self):
+        script = str(BIN / "release_binaries.py")
+        with tempfile.TemporaryDirectory() as tmp:
+            path = str(self.archive(tmp, 2 * rb.MIB))
+            ok = run([sys.executable, "-I", script, "check-size", path], env={"MAX_ARCHIVE_MIB": ""})
+            self.assertEqual(ok.returncode, 0, ok.stderr)
+            self.assertIn("2.00 MiB", ok.stdout)
+            ok = run([sys.executable, "-I", script, "check-size", path], env={"MAX_ARCHIVE_MIB": "2"})
+            self.assertEqual(ok.returncode, 0, ok.stderr)
+            over = run([sys.executable, "-I", script, "check-size", path], env={"MAX_ARCHIVE_MIB": "1"})
+            self.assertEqual(over.returncode, 1)
+            self.assertIn("over the 1 MiB limit", over.stderr)
+            bad = run([sys.executable, "-I", script, "check-size", path], env={"MAX_ARCHIVE_MIB": "big"})
+            self.assertEqual(bad.returncode, 1)
+            self.assertIn("positive number", bad.stderr)
+
+    def test_workflow_passes_the_variable_through_env_not_run(self):
+        text = (WORKFLOWS / "build-binaries.yml").read_text(encoding="utf-8")
+        step = re.search(r"- name: Check the archive size\n(.*?)(?=\n      #|\n      - name:)", text, re.DOTALL).group(1)
+        self.assertIn("MAX_ARCHIVE_MIB: ${{ vars.MAX_ARCHIVE_MIB }}", step)
+        run_block = step.split("run:", 1)[1]
+        self.assertNotIn("${{", run_block)
+        self.assertIn("check-size", run_block)
+
+
 class NpmPackages(unittest.TestCase):
     def build(self, version="1.2.3"):
         tmp = tempfile.TemporaryDirectory()

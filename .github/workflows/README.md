@@ -39,7 +39,9 @@
   the npm tarballs and the Homebrew formula, attests every file with
   `actions/attest` (SLSA Build L3: the build runs in its own workflow) and
   uploads the `release-binaries` artifact. Publishes nothing and holds no
-  registry credential.
+  registry credential. The optional repository variable `MAX_ARCHIVE_MIB`
+  (a positive number; unset or empty means no check) makes each `build` leg
+  fail if its archive is larger than that many MiB.
 - `release.yml` — manually triggered, and only from the default branch:
   the `version` job's first step fails on any other ref, and `build`,
   `release` and `publish-packages` repeat the check in their own `if:`.

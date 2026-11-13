@@ -12,6 +12,11 @@ Commands:
                                      DEST and print DEST
   smoke ARCHIVE VERSION              unpack a dist archive and check that the
                                      binary reports VERSION from --version
+  check-size ARCHIVE...              print each archive's size; when the env var
+                                     MAX_ARCHIVE_MIB is set, fail if any archive
+                                     is larger than that many MiB (a positive
+                                     number; anything else fails). Unset or
+                                     empty: sizes are printed, nothing fails
   npm --version V --archives DIR --out DIR
                                      write one npm package directory per
                                      target (and the root package) under OUT;
@@ -31,6 +36,7 @@ at the repository root (override with ROOT).
 """
 
 import argparse
+import decimal
 import hashlib
 import io
 import json
@@ -263,6 +269,36 @@ def smoke(archive: Path, version: str, binary: str) -> str:
     return result.stdout.strip()
 
 
+# --- size gate -----------------------------------------------------------------
+
+MIB = 1024 * 1024
+
+
+def check_sizes(archives: list[Path], limit: str | None) -> list[str]:
+    """One "name: N.NN MiB" line per archive; raise Error when one exceeds `limit`.
+
+    `limit` is the MAX_ARCHIVE_MIB variable: None or blank means no gate, anything
+    that is not a positive decimal number fails closed rather than being skipped.
+    """
+    limit = (limit or "").strip()
+    maximum = None
+    if limit:
+        if not re.fullmatch(r"[0-9]+(\.[0-9]+)?", limit) or not decimal.Decimal(limit) > 0:
+            raise Error(f"MAX_ARCHIVE_MIB must be a positive number of MiB, got {limit!r}")
+        maximum = decimal.Decimal(limit) * MIB
+    if not archives:
+        raise Error("no archives to check")
+    lines, too_big = [], []
+    for archive in archives:
+        size = archive.stat().st_size
+        lines.append(f"{archive.name}: {size / MIB:.2f} MiB ({size} bytes)")
+        if maximum is not None and size > maximum:
+            too_big.append(f"{archive.name} is {size / MIB:.2f} MiB, over the {limit} MiB limit (MAX_ARCHIVE_MIB)")
+    if too_big:
+        raise Error("; ".join(too_big))
+    return lines
+
+
 # --- npm -----------------------------------------------------------------------
 
 
@@ -413,6 +449,8 @@ def main(argv: list[str]) -> int:
     p = sub.add_parser("smoke")
     p.add_argument("archive", type=Path)
     p.add_argument("version")
+    p = sub.add_parser("check-size")
+    p.add_argument("archives", type=Path, nargs="+")
     p = sub.add_parser("npm")
     p.add_argument("--version", required=True)
     p.add_argument("--archives", type=Path, required=True)
@@ -430,6 +468,8 @@ def main(argv: list[str]) -> int:
             print(install_tool(args.tool, args.dest))
         elif args.command == "smoke":
             print(smoke(args.archive, args.version, load_project()["binary"]))
+        elif args.command == "check-size":
+            print("\n".join(check_sizes(args.archives, os.environ.get("MAX_ARCHIVE_MIB"))))
         elif args.command == "npm":
             for directory in build_npm(args.version, args.archives, args.out, load_project()):
                 print(directory)

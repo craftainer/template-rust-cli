@@ -935,6 +935,17 @@ in `docs/adrs/0002-rust-cli-template.md`.
   job on; unset, the job does not run. The GitHub release assets always
   upload. These are not the contract's `*_PUBLISH` variables, which would
   also make the parent's `release.yml` create publish jobs.
+- **Archive size gate (repository variable).** `MAX_ARCHIVE_MIB` is opt-in
+  and per instance: when set to a positive number, the `Check the archive
+  size` step of each `build` leg in `build-binaries.yml` fails if that
+  target's dist archive (the compressed `.tar.gz` or `.zip`, not the binary
+  inside) is larger than that many MiB. It runs
+  `release_binaries.py check-size`, which prints every archive's size, treats
+  unset or empty as no gate, and fails closed on a value that is not a
+  positive number. The variable reaches the script through the step's `env:`,
+  never interpolated into `run:`. Unit tests are in
+  `scripts/test_release_binaries.py` (`SizeGate`); no CI job builds a real
+  archive outside a release, so the step itself runs only in release builds.
 - **Homebrew.** `release_binaries.py brew` writes the formula from the
   archives' checksums; it is attached to the GitHub release, and the tap job
   commits it to `Formula/` when `HOMEBREW_TAP` is set. The formula's `test`
