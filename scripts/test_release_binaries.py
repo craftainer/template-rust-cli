@@ -368,7 +368,7 @@ class SizeGate(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = self.archive(tmp, 3 * rb.MIB + 1)
             self.assertLess(path.stat().st_size, rb.MIB)  # the archive alone would pass a 1 MiB cap
-            with self.assertRaisesRegex(rb.Error, rf"{path.name}: binary is 3.00 MiB, over the 3 MiB limit"):
+            with self.assertRaisesRegex(rb.Error, rf"{path.name}: binary is 3.00 MiB \({3 * rb.MIB + 1} bytes\), over the 3 MiB limit"):
                 rb.check_sizes([path], "3", BINARY)
 
     def test_every_archive_format_is_measured_by_its_binary(self):

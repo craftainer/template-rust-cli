@@ -300,9 +300,9 @@ def check_sizes(archives: list[Path], limit: str | None, binary: str) -> list[st
             f"{archive.name}: binary {size / MIB:.2f} MiB ({size} bytes), archive {packed / MIB:.2f} MiB ({packed} bytes)"
         )
         if maximum is not None and size > maximum:
-            too_big.append(f"{archive.name}: binary is {size / MIB:.2f} MiB, over the {limit} MiB limit (MAX_BINARY_MIB)")
+            too_big.append(f"{archive.name}: binary is {size / MIB:.2f} MiB ({size} bytes), over the {limit} MiB limit (MAX_BINARY_MIB)")
     if too_big:
-        raise Error("; ".join(too_big))
+        raise Error("\n".join([*lines, *too_big]))
     return lines
 
 

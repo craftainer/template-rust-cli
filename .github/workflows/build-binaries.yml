@@ -123,6 +123,7 @@ jobs:
         run: |
           archives=(target/distrib/*-"$TARGET"."$ARCHIVE")
           test "${#archives[@]}" -eq 1
+          test -f "${archives[0]}"
           uv run --no-project --python '>=3.11' python -I scripts/binaries/release_binaries.py check-size "${archives[@]}"
 
       # The musl binary is static, so the one Linux wheel is tagged for glibc
