@@ -340,6 +340,77 @@ class Archives(unittest.TestCase):
                 rb.read_sha256_file(path, "x.tar.gz")
 
 
+class SizeGate(unittest.TestCase):
+    """MAX_BINARY_MIB: opt-in cap on the size of the binary inside each archive."""
+
+    def archive(self, tmp, size, target=None):
+        """A dist archive whose binary is `size` bytes of zeros (so it compresses to almost nothing)."""
+        path, _ = make_archive(Path(tmp), target or rb.load_targets()[0], payload=b"\0" * size)
+        return path
+
+    def test_unset_or_blank_prints_both_sizes_and_never_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = self.archive(tmp, 3 * rb.MIB)
+            for limit in (None, "", "  "):
+                with self.subTest(limit=limit):
+                    (line,) = rb.check_sizes([path], limit, BINARY)
+                    self.assertIn(f"{path.name}: binary 3.00 MiB ({3 * rb.MIB} bytes), archive ", line)
+                    self.assertIn(f"({path.stat().st_size} bytes)", line)
+
+    def test_under_and_exactly_at_the_limit_pass(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = self.archive(tmp, 3 * rb.MIB)
+            for limit in ("4", "3", "3.5"):
+                with self.subTest(limit=limit):
+                    self.assertEqual(len(rb.check_sizes([path], limit, BINARY)), 1)
+
+    def test_binary_over_the_limit_fails_even_when_the_archive_is_under(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = self.archive(tmp, 3 * rb.MIB + 1)
+            self.assertLess(path.stat().st_size, rb.MIB)  # the archive alone would pass a 1 MiB cap
+            with self.assertRaisesRegex(rb.Error, rf"{path.name}: binary is 3.00 MiB \({3 * rb.MIB + 1} bytes\), over the 3 MiB limit"):
+                rb.check_sizes([path], "3", BINARY)
+
+    def test_every_archive_format_is_measured_by_its_binary(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = [self.archive(tmp, 2 * rb.MIB, t) for t in rb.load_targets()]
+            self.assertEqual({p.suffix for p in paths}, {".gz", ".zip"})
+            self.assertEqual(len(rb.check_sizes(paths, "2", BINARY)), len(paths))
+            with self.assertRaisesRegex(rb.Error, "over the 1 MiB limit"):
+                rb.check_sizes(paths, "1", BINARY)
+
+    def test_non_numeric_or_non_positive_limit_fails_closed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = self.archive(tmp, 10)
+            for limit in ("thirty", "30MiB", "-1", "0", "0.0", "1e3", "NaN", "1.", ".5"):
+                with self.subTest(limit=limit), self.assertRaisesRegex(rb.Error, "positive number"):
+                    rb.check_sizes([path], limit, BINARY)
+
+    def test_cli_reads_the_variable_from_the_environment(self):
+        script = str(BIN / "release_binaries.py")
+        with tempfile.TemporaryDirectory() as tmp:
+            path = str(self.archive(tmp, 2 * rb.MIB))
+            ok = run([sys.executable, "-I", script, "check-size", path], env={"MAX_BINARY_MIB": ""})
+            self.assertEqual(ok.returncode, 0, ok.stderr)
+            self.assertIn("binary 2.00 MiB", ok.stdout)
+            ok = run([sys.executable, "-I", script, "check-size", path], env={"MAX_BINARY_MIB": "2"})
+            self.assertEqual(ok.returncode, 0, ok.stderr)
+            over = run([sys.executable, "-I", script, "check-size", path], env={"MAX_BINARY_MIB": "1"})
+            self.assertEqual(over.returncode, 1)
+            self.assertIn("over the 1 MiB limit", over.stderr)
+            bad = run([sys.executable, "-I", script, "check-size", path], env={"MAX_BINARY_MIB": "big"})
+            self.assertEqual(bad.returncode, 1)
+            self.assertIn("positive number", bad.stderr)
+
+    def test_workflow_passes_the_variable_through_env_not_run(self):
+        text = (WORKFLOWS / "build-binaries.yml").read_text(encoding="utf-8")
+        step = re.search(r"- name: Check the binary size\n(.*?)(?=\n      #|\n      - name:)", text, re.DOTALL).group(1)
+        self.assertIn("MAX_BINARY_MIB: ${{ vars.MAX_BINARY_MIB }}", step)
+        run_block = step.split("run:", 1)[1]
+        self.assertNotIn("${{", run_block)
+        self.assertIn("check-size", run_block)
+
+
 class NpmPackages(unittest.TestCase):
     def build(self, version="1.2.3"):
         tmp = tempfile.TemporaryDirectory()

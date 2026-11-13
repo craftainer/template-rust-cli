@@ -121,6 +121,12 @@ publishes to whichever of these you switched on with a repository variable:
 | `HOMEBREW_TAP` = `<owner>/homebrew-<tap>` | commits `Formula/<binary>.rb` to the tap | the secret `HOMEBREW_TAP_TOKEN` (write access to the tap) |
 | `CLI_IMAGE_PUBLISH` = any value | `ghcr.io/<owner>/<repo>:<version>` (and `latest` for a stable release), multi-arch | nothing beyond `GITHUB_TOKEN` |
 
+One more variable is a gate, not a publisher: `MAX_BINARY_MIB` = a positive
+number makes the binary build fail when the release binary inside any archive
+is larger than that many MiB (the binary's and the archive's sizes are printed
+either way). Unset or empty, nothing
+is checked. A value that is not a positive number fails the build.
+
 Create the GitHub environment `release` first (the PyPI, npm and Homebrew
 jobs run in it, so you can add required reviewers there). The workflow only
 runs from the default branch, for a published release whose tag is on it, and

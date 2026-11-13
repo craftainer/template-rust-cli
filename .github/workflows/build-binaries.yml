@@ -7,9 +7,10 @@
 #
 # Per target (matrix, one native runner each): `dist build` makes the archive
 # and its checksum, `maturin build` the wheel; both are smoke-tested and
-# attested. Then once: the sdist, the npm tarballs (six platform packages and
-# the root package), the Homebrew formula, all attested, and everything is
-# uploaded as the `release-binaries` artifact for the caller to publish.
+# attested. An instance can cap the binary size with the MAX_BINARY_MIB
+# repository variable (unset: no cap). Then once: the sdist, the npm tarballs
+# (six platform packages and the root package), the Homebrew formula, all
+# attested, and everything is uploaded as the `release-binaries` artifact for the caller to publish.
 # Nothing is published from here, so no registry credential exists in this
 # workflow; `id-token: write` and `attestations: write` are only for the
 # attestations (the caller sets them too: a called workflow can't hold
@@ -111,6 +112,19 @@ jobs:
 
       - name: Build the archive
         run: dist build --tag "$RELEASE_TAG" --artifacts=local --target "$TARGET"
+
+      # Opt-in: the repository variable MAX_BINARY_MIB caps the size of each
+      # target's release binary (the one inside the archive); unset or empty,
+      # the sizes are printed and nothing can fail. A value that is not a
+      # positive number fails the job.
+      - name: Check the binary size
+        env:
+          MAX_BINARY_MIB: ${{ vars.MAX_BINARY_MIB }}
+        run: |
+          archives=(target/distrib/*-"$TARGET"."$ARCHIVE")
+          test "${#archives[@]}" -eq 1
+          test -f "${archives[0]}"
+          uv run --no-project --python '>=3.11' python -I scripts/binaries/release_binaries.py check-size "${archives[@]}"
 
       # The musl binary is static, so the one Linux wheel is tagged for glibc
       # (manylinux2014) and musl (musllinux_1_2) hosts alike.
