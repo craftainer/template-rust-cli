@@ -12,11 +12,13 @@ Commands:
                                      DEST and print DEST
   smoke ARCHIVE VERSION              unpack a dist archive and check that the
                                      binary reports VERSION from --version
-  check-size ARCHIVE...              print each archive's size; when the env var
-                                     MAX_ARCHIVE_MIB is set, fail if any archive
-                                     is larger than that many MiB (a positive
-                                     number; anything else fails). Unset or
-                                     empty: sizes are printed, nothing fails
+  check-size ARCHIVE...              print the size of the binary inside each
+                                     archive and of the archive itself; when the
+                                     env var MAX_BINARY_MIB is set, fail if any
+                                     binary is larger than that many MiB (a
+                                     positive number; anything else fails).
+                                     Unset or empty: sizes are printed, nothing
+                                     fails
   npm --version V --archives DIR --out DIR
                                      write one npm package directory per
                                      target (and the root package) under OUT;
@@ -274,26 +276,31 @@ def smoke(archive: Path, version: str, binary: str) -> str:
 MIB = 1024 * 1024
 
 
-def check_sizes(archives: list[Path], limit: str | None) -> list[str]:
-    """One "name: N.NN MiB" line per archive; raise Error when one exceeds `limit`.
+def check_sizes(archives: list[Path], limit: str | None, binary: str) -> list[str]:
+    """One line per archive with its binary's and its own size; raise Error when a
+    binary (not the compressed archive) exceeds `limit`.
 
-    `limit` is the MAX_ARCHIVE_MIB variable: None or blank means no gate, anything
+    `limit` is the MAX_BINARY_MIB variable: None or blank means no gate, anything
     that is not a positive decimal number fails closed rather than being skipped.
     """
     limit = (limit or "").strip()
     maximum = None
     if limit:
         if not re.fullmatch(r"[0-9]+(\.[0-9]+)?", limit) or not decimal.Decimal(limit) > 0:
-            raise Error(f"MAX_ARCHIVE_MIB must be a positive number of MiB, got {limit!r}")
+            raise Error(f"MAX_BINARY_MIB must be a positive number of MiB, got {limit!r}")
         maximum = decimal.Decimal(limit) * MIB
     if not archives:
         raise Error("no archives to check")
     lines, too_big = [], []
     for archive in archives:
-        size = archive.stat().st_size
-        lines.append(f"{archive.name}: {size / MIB:.2f} MiB ({size} bytes)")
+        exe = ".exe" if archive.suffix == ".zip" else ""
+        size = len(extract_binary(archive, binary + exe))
+        packed = archive.stat().st_size
+        lines.append(
+            f"{archive.name}: binary {size / MIB:.2f} MiB ({size} bytes), archive {packed / MIB:.2f} MiB ({packed} bytes)"
+        )
         if maximum is not None and size > maximum:
-            too_big.append(f"{archive.name} is {size / MIB:.2f} MiB, over the {limit} MiB limit (MAX_ARCHIVE_MIB)")
+            too_big.append(f"{archive.name}: binary is {size / MIB:.2f} MiB, over the {limit} MiB limit (MAX_BINARY_MIB)")
     if too_big:
         raise Error("; ".join(too_big))
     return lines
@@ -469,7 +476,7 @@ def main(argv: list[str]) -> int:
         elif args.command == "smoke":
             print(smoke(args.archive, args.version, load_project()["binary"]))
         elif args.command == "check-size":
-            print("\n".join(check_sizes(args.archives, os.environ.get("MAX_ARCHIVE_MIB"))))
+            print("\n".join(check_sizes(args.archives, os.environ.get("MAX_BINARY_MIB"), load_project()["binary"])))
         elif args.command == "npm":
             for directory in build_npm(args.version, args.archives, args.out, load_project()):
                 print(directory)
