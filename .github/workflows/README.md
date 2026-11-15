@@ -14,16 +14,6 @@
   `SEMVER_RELEASE_TYPE=` with an optional `major`, `minor` or `patch`
   value, failing otherwise), so a `!`-marked PR title (or, on
   `main`, head commit subject) runs `cargo semver-checks` as `major`.
-<<<<<<< /home/runner/work/template-rust-cli/template-rust-cli/.github/workflows/README.md
-- `smoke.yml` — builds the `runner` stage of the root `Dockerfile` via
-  the root `compose.yml`, starts it against the real Postgres, RustFS,
-  Redis, and Keycloak backing services, and confirms `/health/live` and
-  `/health/ready` both return 200 -- on push, on pull requests, and on
-  demand. Runs as the same two-leg `amd64`/`arm64` matrix as
-  `checks.yml` — this is the check that would actually catch an
-  arch-specific runtime break (e.g. a C-extension dependency missing an
-  arm64 wheel), since `checks.yml`'s test run uses `MODE=mock`
-  in-process fakes for some paths rather than the built image.
 - `release-binaries.yml` — manually dispatched with a `tag` input, right after
   each `Release`: `gh workflow run release-binaries.yml -f tag=vX.Y.Z`. Ships
   the CLI's binaries: attaches the dist archives, their checksums and the
@@ -47,8 +37,6 @@
   registry credential. The optional repository variable `MAX_BINARY_MIB`
   (a positive number; unset or empty means no check) makes each `build` leg
   fail if the binary inside its archive is larger than that many MiB.
-=======
->>>>>>> /tmp/template-new/.github/workflows/README.md
 - `release.yml` — manually triggered, and only from the default branch:
   the `version` job's first step fails on any other ref, and `build`,
   `release` and `publish-packages` repeat the check in their own `if:`.
